@@ -3,7 +3,7 @@
 import express from "express";
 import Staff from "../models/Staff.js";
 
-import { verifyPassword } from "../db.js";
+import { verifyPassword } from "../utils/password.js";
 import {
   signToken,
   requireStaff,

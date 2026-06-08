@@ -1,6 +1,9 @@
 // Customer registration + login.
 import express from "express";
-import { db, hashPassword, verifyPassword, uid } from "../db.js";
+import {
+  hashPassword,
+  verifyPassword,
+} from "../utils/password.js";
 import { signToken, requireCustomer } from "../auth.js";
 import Customer from "../models/Customer.js";
 

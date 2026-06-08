@@ -9,7 +9,7 @@ import dotenv from "dotenv";
 import connectDB from "../config/db.js";
 
 import { config } from "./config.js";
-import { db, seed } from "./db.js";
+
 import { verifyToken } from "./auth.js";
 
 import customerAuth from "./routes/customerAuth.js";
@@ -22,7 +22,7 @@ import customers from "./routes/customers.js";
 dotenv.config();
 await connectDB();
 
-seed();
+
 
 const app = express();
 
