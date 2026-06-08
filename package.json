@@ -1,0 +1,23 @@
+{
+  "name": "tiffin-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Connected food platform: customer app + restaurant console + Node/SQLite backend with live two-way sync",
+  "workspaces": [
+    "server",
+    "customer-app",
+    "admin-app"
+  ],
+  "scripts": {
+    "install:all": "npm install",
+    "dev": "concurrently -n server,customer,admin -c green,cyan,magenta \"npm:dev:server\" \"npm:dev:customer\" \"npm:dev:admin\"",
+    "dev:server": "npm --workspace server run dev",
+    "dev:customer": "npm --workspace customer-app run dev",
+    "dev:admin": "npm --workspace admin-app run dev",
+    "build": "npm --workspace customer-app run build && npm --workspace admin-app run build",
+    "start": "npm --workspace server run start"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}

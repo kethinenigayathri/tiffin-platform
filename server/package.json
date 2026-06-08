@@ -1,0 +1,19 @@
+{
+  "name": "tiffin-platform-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Node + SQLite + Socket.IO backend connecting the customer and restaurant apps",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node src/index.js",
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.2",
+    "socket.io": "^4.7.5"
+  }
+}
