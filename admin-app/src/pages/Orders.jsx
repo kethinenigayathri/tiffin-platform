@@ -178,21 +178,34 @@ function OrderDetail({ order, onClose }) {
           </button>
 
           <div className="field">
-            <label>Assign delivery partner</label>
-            <select
-              className="select"
-              value={order.partnerId || ""}
-              disabled={!canAssign}
-              onChange={(e) => assignPartner(order.no, e.target.value || null)}
-            >
-              <option value="">— Select rider —</option>
-              {available.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} · {p.vehicle} · {p.zone} {p.status === "on-delivery" ? "(busy)" : ""}
-                </option>
-              ))}
-            </select>
-          </div>
+  <label>Assign delivery partner</label>
+
+  <select
+    className="select"
+    value={order.partnerId || ""}
+    disabled={!canAssign}
+    onChange={(e) =>
+      assignPartner(order.no, e.target.value || null)
+    }
+  >
+    <option value="">
+      — Select rider —
+    </option>
+
+    {available.map((p) => (
+      <option
+        key={p._id || p.id}
+        value={p._id || p.id}
+      >
+        {p.name} · {p.vehicle} · {p.zone}
+        {" "}
+        {p.status === "on-delivery"
+          ? "(busy)"
+          : ""}
+      </option>
+    ))}
+  </select>
+</div>
 
           {partner && (
             <div className="card card-pad" style={{ background: "var(--surface)", marginTop: 6 }}>

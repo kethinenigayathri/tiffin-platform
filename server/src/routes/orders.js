@@ -1,168 +1,616 @@
 // Order endpoints — customer places orders, staff manage them.
+// MongoDB + Mongoose version
 // Emits Socket.IO events for two-way live sync.
+
 import express from "express";
-import { db, uid, nextOrderNo } from "../db.js";
-import { requireCustomer, requireStaff, requirePermission } from "../auth.js";
+import crypto from "node:crypto";
+
+import Order from "../models/Order.js";
+import Customer from "../models/Customer.js";
+import Partner from "../models/Partner.js";
+
+import { nextOrderNo } from "../utils/orderCounter.js";
+
+import {
+  requireCustomer,
+  requireStaff,
+  requirePermission,
+} from "../auth.js";
 
 const router = express.Router();
 
-const STATUS_FLOW = ["new", "preparing", "ready", "out", "completed"];
+const STATUS_FLOW = [
+  "new",
+  "preparing",
+  "ready",
+  "out",
+  "completed",
+];
 
-function rowToOrder(r) {
+const uid = (prefix = "id") =>
+  prefix +
+  "_" +
+  crypto.randomBytes(6).toString("hex");
+
+function rowToOrder(order) {
   return {
-    id: r.id,
-    no: r.no,
-    customerId: r.customer_id,
-    customer: r.customer_name,
-    phone: r.phone,
-    email: r.email,
-    type: r.type,
-    address: r.address,
-    items: JSON.parse(r.items || "[]"),
-    total: r.total,
-    status: r.status,
-    partnerId: r.partner_id,
-    payment: r.payment,
-    note: r.note,
-    placedAt: r.placed_at,
+    id: order._id,
+
+    no: order.no,
+
+    customerId: order.customer_id,
+
+    customer: order.customer_name,
+
+    phone: order.phone,
+
+    email: order.email,
+
+    type: order.type,
+
+    address: order.address,
+
+    items: order.items || [],
+
+    total: order.total,
+
+    status: order.status,
+
+    partnerId: order.partner_id,
+
+    payment: order.payment,
+
+    note: order.note,
+
+    placedAt: order.placed_at,
   };
 }
 
-function getOrder(id) {
-  const row = db.prepare("SELECT * FROM orders WHERE id = ?").get(id);
-  return row ? rowToOrder(row) : null;
+async function getOrder(id) {
+  const order = await Order.findById(id);
+
+  return order ? rowToOrder(order) : null;
 }
 
 function emitUpdate(req, order) {
   const io = req.app.get("io");
-  io.to("staff").emit("order:update", order);
-  if (order.customerId) io.to(`customer_${order.customerId}`).emit("order:update", order);
+
+  io.to("staff").emit(
+    "order:update",
+    order
+  );
+
+  if (order.customerId) {
+    io.to(
+      `customer_${order.customerId}`
+    ).emit("order:update", order);
+  }
 }
 
-// ---- CUSTOMER: place an order ----
-router.post("/", requireCustomer, (req, res) => {
-  const b = req.body || {};
-  const items = Array.isArray(b.items) ? b.items : [];
-  if (items.length === 0) return res.status(400).json({ error: "Order must contain at least one item" });
+/* ----------------------------------
+   CUSTOMER: PLACE ORDER
+---------------------------------- */
 
-  const total = items.reduce((s, i) => s + Number(i.price) * Number(i.qty), 0);
-  const customer = db.prepare("SELECT * FROM customers WHERE id = ?").get(req.user.sub);
-  const order = {
-    id: uid("ord"),
-    no: nextOrderNo(),
-    customer_id: req.user.sub,
-    customer_name: b.customerName || customer?.name || req.user.name,
-    phone: b.phone || customer?.phone || "",
-    email: customer?.email || "",
-    type: b.type === "pickup" ? "pickup" : "delivery",
-    address: b.type === "pickup" ? "—" : (b.address || customer?.address || ""),
-    items: JSON.stringify(items.map((i) => ({ id: i.id, name: i.name, price: Number(i.price), qty: Number(i.qty), emoji: i.emoji || "" }))),
-    total,
-    status: "new",
-    partner_id: null,
-    payment: b.payment || "Card",
-    note: b.note || "",
-    placed_at: new Date().toISOString(),
-  };
-  db.prepare(
-    `INSERT INTO orders (id, no, customer_id, customer_name, phone, email, type, address, items, total, status, partner_id, payment, note, placed_at)
-     VALUES (@id, @no, @customer_id, @customer_name, @phone, @email, @type, @address, @items, @total, @status, @partner_id, @payment, @note, @placed_at)`
-  ).run(order);
+router.post(
+  "/",
+  requireCustomer,
+  async (req, res) => {
+    try {
+      const b = req.body || {};
 
-  const created = getOrder(order.id);
-  const io = req.app.get("io");
-  io.to("staff").emit("order:new", created); // restaurant gets the order live
-  res.json(created);
-});
+      const items = Array.isArray(
+        b.items
+      )
+        ? b.items
+        : [];
 
-// ---- CUSTOMER: my orders ----
-router.get("/mine", requireCustomer, (req, res) => {
-  const rows = db.prepare("SELECT * FROM orders WHERE customer_id = ? ORDER BY no DESC").all(req.user.sub);
-  res.json(rows.map(rowToOrder));
-});
+      if (!items.length) {
+        return res.status(400).json({
+          error:
+            "Order must contain at least one item",
+        });
+      }
 
-// ---- STAFF: all orders ----
-router.get("/", requireStaff, (req, res) => {
-  const rows = db.prepare("SELECT * FROM orders ORDER BY no DESC").all();
-  res.json(rows.map(rowToOrder));
-});
+      const total = items.reduce(
+        (sum, item) =>
+          sum +
+          Number(item.price) *
+            Number(item.qty),
+        0
+      );
 
-// ---- STAFF: manual order entry ----
-router.post("/manual", requireStaff, requirePermission("orders:create"), (req, res) => {
-  const b = req.body || {};
-  const items = Array.isArray(b.items) ? b.items : [];
-  if (items.length === 0) return res.status(400).json({ error: "Order must contain at least one item" });
-  const total = items.reduce((s, i) => s + Number(i.price) * Number(i.qty), 0);
-  const order = {
-    id: uid("ord"),
-    no: nextOrderNo(),
-    customer_id: null,
-    customer_name: b.customer || "Walk-in",
-    phone: b.phone || "",
-    email: "",
-    type: b.type === "pickup" ? "pickup" : "delivery",
-    address: b.type === "pickup" ? "—" : (b.address || ""),
-    items: JSON.stringify(items.map((i) => ({ id: i.id, name: i.name, price: Number(i.price), qty: Number(i.qty) }))),
-    total,
-    status: "new",
-    partner_id: null,
-    payment: b.payment || "Cash",
-    note: b.note || "",
-    placed_at: new Date().toISOString(),
-  };
-  db.prepare(
-    `INSERT INTO orders (id, no, customer_id, customer_name, phone, email, type, address, items, total, status, partner_id, payment, note, placed_at)
-     VALUES (@id, @no, @customer_id, @customer_name, @phone, @email, @type, @address, @items, @total, @status, @partner_id, @payment, @note, @placed_at)`
-  ).run(order);
-  const created = getOrder(order.id);
-  req.app.get("io").to("staff").emit("order:new", created);
-  res.json(created);
-});
+      const customer =
+        await Customer.findById(
+          req.user.sub
+        );
 
-// ---- STAFF: change status ----
-router.patch("/:id/status", requireStaff, requirePermission("orders:status"), (req, res) => {
-  const { status } = req.body || {};
-  if (![...STATUS_FLOW, "cancelled"].includes(status)) return res.status(400).json({ error: "Invalid status" });
-  const order = getOrder(req.params.id);
-  if (!order) return res.status(404).json({ error: "Not found" });
-  db.prepare("UPDATE orders SET status = ? WHERE id = ?").run(status, order.id);
-  const updated = getOrder(order.id);
-  emitUpdate(req, updated);
-  res.json(updated);
-});
+      const orderNo =
+        await nextOrderNo();
 
-// ---- STAFF: assign delivery partner ----
-router.patch("/:id/assign", requireStaff, requirePermission("orders:assign"), (req, res) => {
-  const { partnerId } = req.body || {};
-  const order = getOrder(req.params.id);
-  if (!order) return res.status(404).json({ error: "Not found" });
-  const newStatus = order.status === "new" ? "preparing" : order.status;
-  db.prepare("UPDATE orders SET partner_id = ?, type = 'delivery', status = ? WHERE id = ?").run(partnerId || null, newStatus, order.id);
-  if (partnerId) db.prepare("UPDATE partners SET status = 'on-delivery' WHERE id = ?").run(partnerId);
-  const updated = getOrder(order.id);
-  emitUpdate(req, updated);
-  req.app.get("io").to("staff").emit("partners:update");
-  res.json(updated);
-});
+      const order =
+        await Order.create({
+          no: orderNo,
 
-// ---- STAFF: mark self-pickup ----
-router.patch("/:id/pickup", requireStaff, requirePermission("orders:assign"), (req, res) => {
-  const order = getOrder(req.params.id);
-  if (!order) return res.status(404).json({ error: "Not found" });
-  db.prepare("UPDATE orders SET type = 'pickup', partner_id = NULL, address = '—' WHERE id = ?").run(order.id);
-  const updated = getOrder(order.id);
-  emitUpdate(req, updated);
-  res.json(updated);
-});
+          customer_id:
+            req.user.sub,
 
-// ---- STAFF: cancel ----
-router.patch("/:id/cancel", requireStaff, requirePermission("orders:cancel"), (req, res) => {
-  const order = getOrder(req.params.id);
-  if (!order) return res.status(404).json({ error: "Not found" });
-  db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(order.id);
-  const updated = getOrder(order.id);
-  emitUpdate(req, updated);
-  res.json(updated);
-});
+          customer_name:
+            b.customerName ||
+            customer?.name ||
+            req.user.name,
+
+          phone:
+            b.phone ||
+            customer?.phone ||
+            "",
+
+          email:
+            customer?.email || "",
+
+          type:
+            b.type === "pickup"
+              ? "pickup"
+              : "delivery",
+
+          address:
+            b.type === "pickup"
+              ? "—"
+              : b.address ||
+                customer?.address ||
+                "",
+
+          items: items.map((i) => ({
+            id:
+              i.id ||
+              uid("item"),
+            name: i.name,
+            price:
+              Number(i.price),
+            qty:
+              Number(i.qty),
+            emoji:
+              i.emoji || "",
+          })),
+
+          total,
+
+          status: "new",
+
+          partner_id: null,
+
+          payment:
+            b.payment || "Card",
+
+          note: b.note || "",
+
+          placed_at:
+            new Date(),
+        });
+
+      const created =
+        rowToOrder(order);
+
+      req.app
+        .get("io")
+        .to("staff")
+        .emit(
+          "order:new",
+          created
+        );
+
+      res.json(created);
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        error:
+          "Failed to create order",
+      });
+    }
+  }
+);
+
+/* ----------------------------------
+   CUSTOMER: MY ORDERS
+---------------------------------- */
+
+router.get(
+  "/mine",
+  requireCustomer,
+  async (req, res) => {
+    try {
+      const orders =
+        await Order.find({
+          customer_id:
+            req.user.sub,
+        }).sort({
+          no: -1,
+        });
+
+      res.json(
+        orders.map(rowToOrder)
+      );
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        error:
+          "Failed to load orders",
+      });
+    }
+  }
+);
+
+/* ----------------------------------
+   STAFF: ALL ORDERS
+---------------------------------- */
+
+router.get(
+  "/",
+  requireStaff,
+  async (req, res) => {
+    try {
+      const orders =
+        await Order.find().sort({
+          no: -1,
+        });
+
+      res.json(
+        orders.map(rowToOrder)
+      );
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        error:
+          "Failed to load orders",
+      });
+    }
+  }
+);
+
+/* ----------------------------------
+   STAFF: MANUAL ORDER
+---------------------------------- */
+
+router.post(
+  "/manual",
+  requireStaff,
+  requirePermission(
+    "orders:create"
+  ),
+  async (req, res) => {
+    try {
+      const b = req.body || {};
+
+      const items = Array.isArray(
+        b.items
+      )
+        ? b.items
+        : [];
+
+      if (!items.length) {
+        return res.status(400).json({
+          error:
+            "Order must contain at least one item",
+        });
+      }
+
+      const total = items.reduce(
+        (sum, item) =>
+          sum +
+          Number(item.price) *
+            Number(item.qty),
+        0
+      );
+
+      const orderNo =
+        await nextOrderNo();
+
+      const order =
+        await Order.create({
+          no: orderNo,
+
+          customer_id: null,
+
+          customer_name:
+            b.customer ||
+            "Walk-in",
+
+          phone:
+            b.phone || "",
+
+          email: "",
+
+          type:
+            b.type === "pickup"
+              ? "pickup"
+              : "delivery",
+
+          address:
+            b.type === "pickup"
+              ? "—"
+              : b.address || "",
+
+          items,
+
+          total,
+
+          status: "new",
+
+          partner_id: null,
+
+          payment:
+            b.payment || "Cash",
+
+          note: b.note || "",
+
+          placed_at:
+            new Date(),
+        });
+
+      const created =
+        rowToOrder(order);
+
+      req.app
+        .get("io")
+        .to("staff")
+        .emit(
+          "order:new",
+          created
+        );
+
+      res.json(created);
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        error:
+          "Failed to create order",
+      });
+    }
+  }
+);
+
+/* ----------------------------------
+   STAFF: UPDATE STATUS
+---------------------------------- */
+
+router.patch(
+  "/:id/status",
+  requireStaff,
+  requirePermission(
+    "orders:status"
+  ),
+  async (req, res) => {
+    try {
+      const { status } =
+        req.body || {};
+
+      if (
+        ![
+          ...STATUS_FLOW,
+          "cancelled",
+        ].includes(status)
+      ) {
+        return res.status(400).json({
+          error:
+            "Invalid status",
+        });
+      }
+
+      const order =
+        await Order.findByIdAndUpdate(
+          req.params.id,
+          { status },
+          { new: true }
+        );
+
+      if (!order) {
+        return res.status(404).json({
+          error: "Not found",
+        });
+      }
+
+      const updated =
+        rowToOrder(order);
+
+      emitUpdate(
+        req,
+        updated
+      );
+
+      res.json(updated);
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        error:
+          "Failed to update order",
+      });
+    }
+  }
+);
+
+/* ----------------------------------
+   STAFF: ASSIGN PARTNER
+---------------------------------- */
+
+router.patch(
+  "/:id/assign",
+  requireStaff,
+  requirePermission(
+    "orders:assign"
+  ),
+  async (req, res) => {
+    try {
+      const { partnerId } =
+        req.body || {};
+
+      const order =
+        await Order.findById(
+          req.params.id
+        );
+
+      if (!order) {
+        return res.status(404).json({
+          error: "Not found",
+        });
+      }
+
+      const newStatus =
+        order.status === "new"
+          ? "preparing"
+          : order.status;
+
+      order.partner_id =
+        partnerId || null;
+
+      order.type =
+        "delivery";
+
+      order.status =
+        newStatus;
+
+      await order.save();
+
+      if (partnerId) {
+        await Partner.findByIdAndUpdate(
+          partnerId,
+          {
+            status:
+              "on-delivery",
+          }
+        );
+      }
+
+      const updated =
+        rowToOrder(order);
+
+      emitUpdate(
+        req,
+        updated
+      );
+
+      req.app
+        .get("io")
+        .to("staff")
+        .emit(
+          "partners:update"
+        );
+
+      res.json(updated);
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        error:
+          "Failed to assign partner",
+      });
+    }
+  }
+);
+
+/* ----------------------------------
+   STAFF: SELF PICKUP
+---------------------------------- */
+
+router.patch(
+  "/:id/pickup",
+  requireStaff,
+  requirePermission(
+    "orders:assign"
+  ),
+  async (req, res) => {
+    try {
+      const order =
+        await Order.findById(
+          req.params.id
+        );
+
+      if (!order) {
+        return res.status(404).json({
+          error: "Not found",
+        });
+      }
+
+      order.type =
+        "pickup";
+
+      order.partner_id =
+        null;
+
+      order.address =
+        "—";
+
+      await order.save();
+
+      const updated =
+        rowToOrder(order);
+
+      emitUpdate(
+        req,
+        updated
+      );
+
+      res.json(updated);
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        error:
+          "Failed to update order",
+      });
+    }
+  }
+);
+
+/* ----------------------------------
+   STAFF: CANCEL ORDER
+---------------------------------- */
+
+router.patch(
+  "/:id/cancel",
+  requireStaff,
+  requirePermission(
+    "orders:cancel"
+  ),
+  async (req, res) => {
+    try {
+      const order =
+        await Order.findById(
+          req.params.id
+        );
+
+      if (!order) {
+        return res.status(404).json({
+          error: "Not found",
+        });
+      }
+
+      order.status =
+        "cancelled";
+
+      await order.save();
+
+      const updated =
+        rowToOrder(order);
+
+      emitUpdate(
+        req,
+        updated
+      );
+
+      res.json(updated);
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        error:
+          "Failed to cancel order",
+      });
+    }
+  }
+);
 
 export default router;

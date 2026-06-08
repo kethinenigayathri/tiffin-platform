@@ -34,6 +34,8 @@ export function StoreProvider({ children }) {
     setMenu(m);
     setPartners(p);
     setCustomers(c);
+
+    console.log("PARTNERS:", p);
   }
 
   useEffect(() => {
@@ -87,6 +89,7 @@ export function StoreProvider({ children }) {
     }
   }
   async function assignPartner(no, partnerId) {
+    console.log("PARTNER SENT:", partnerId);
     const id = findId(no);
     if (!id) return;
     try {
@@ -148,6 +151,7 @@ export function StoreProvider({ children }) {
       flash(e.message);
     }
   }
+  
   async function setPartnerStatus(id, status) {
     try {
       await apiFetch(`/api/partners/${id}/status`, { method: "PATCH", body: { status } });
